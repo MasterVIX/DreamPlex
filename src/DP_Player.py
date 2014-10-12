@@ -23,6 +23,7 @@ You should have received a copy of the GNU General Public License
 # IMPORT
 #===============================================================================
 import threading
+import traceback
 
 from os import remove
 from time import sleep, localtime, time, strftime
@@ -32,9 +33,12 @@ from Screens.MessageBox import MessageBox
 from Screens.MinuteInput import MinuteInput
 from Screens.ChoiceBox import ChoiceBox
 from Screens.HelpMenu import HelpableScreen
+from Screens.AudioSelection import AudioSelection
+
+from skin import parseColor
 
 #noinspection PyUnresolvedReferences
-from enigma import eServiceReference, eConsoleAppContainer, iPlayableService, eTimer, eServiceCenter, iServiceInformation, ePicLoad
+from enigma import eServiceReference, eConsoleAppContainer, iPlayableService, eTimer, eServiceCenter, iServiceInformation, ePicLoad, getDesktop
 
 from Tools import Notifications
 from Tools.Directories import fileExists
@@ -43,7 +47,7 @@ from Components.AVSwitch import AVSwitch
 from Components.config import config
 from Components.Pixmap import Pixmap
 from Components.Label import Label
-from Components.ActionMap import ActionMap
+from Components.ActionMap import ActionMap, HelpableActionMap
 from Components.Slider import Slider
 from Components.Sources.StaticText import StaticText
 from Components.Language import language
@@ -53,22 +57,118 @@ from Screens.InfoBarGenerics import InfoBarShowHide, \
 	InfoBarSeek, InfoBarAudioSelection, \
 	InfoBarServiceNotifications, InfoBarSimpleEventView, \
 	InfoBarExtensions, InfoBarNotifications, \
-	InfoBarSubtitleSupport, InfoBarServiceErrorPopupSupport, InfoBarCueSheetSupport
+	InfoBarServiceErrorPopupSupport, InfoBarCueSheetSupport
 
 from DPH_Singleton import Singleton
 from DP_Summary import DreamplexPlayerSummary
 from DPH_ScreenHelper import DPH_ScreenHelper
 
-from __common__ import printl2 as printl, convertSize, encodeThat, getLiveTv
+from __common__ import printl2 as printl, convertSize, encodeThat
 from __init__ import _ # _ is translation
+
+# init subtitles support
+try:
+	from Plugins.Extensions.SubsSupport import SubsSupport, initSubsSettings
+except ImportError as e:
+	raise Exception("Please install SubsSupport plugin")
+
+class InfoBarAspectChange(object):
+	"""
+	Simple aspect ratio changer
+	"""
+
+	V_DICT = {'16_9_letterbox':{'aspect':'16:9', 'policy2':'letterbox', 'title':'16:9 ' + _("Letterbox")},
+						 '16_9_panscan':{'aspect':'16:9', 'policy2':'panscan', 'title':'16:9 ' + _("Pan&scan")},
+						 '16_9_nonlinear':{'aspect':'16:9', 'policy2':'panscan', 'title':'16:9 ' + _("Nonlinear")},
+						 '16_9_bestfit':{'aspect':'16:9', 'policy2':'bestfit', 'title':'16:9 ' + _("Just scale")},
+						 '16_9_4_3_pillarbox':{'aspect':'16:9', 'policy':'pillarbox', 'title':'4:3 ' + _("PillarBox")},
+						 '16_9_4_3_panscan':{'aspect':'16:9', 'policy':'panscan', 'title':'4:3 ' + _("Pan&scan")},
+						 '16_9_4_3_nonlinear':{'aspect':'16:9', 'policy':'nonlinear', 'title':'4:3 ' + _("Nonlinear")},
+						 '16_9_4_3_bestfit':{'aspect':'16:9', 'policy':'bestfit', 'title':_("Just scale")},
+						 '4_3_letterbox':{'aspect':'4:3', 'policy':'letterbox', 'policy2':'policy', 'title':_("Letterbox")},
+						 '4_3_panscan':{'aspect':'4:3', 'policy':'panscan', 'policy2':'policy', 'title':_("Pan&scan")},
+						 '4_3_bestfit':{'aspect':'4:3', 'policy':'bestfit', 'policy2':'policy', 'title':_("Just scale")}}
+
+	V_MODES = ['16_9_letterbox', '16_9_panscan', '16_9_nonlinear', '16_9_bestfit',
+								'16_9_4_3_pillarbox', '16_9_4_3_panscan', '16_9_4_3_nonlinear', '16_9_4_3_bestfit',
+								'4_3_letterbox', '4_3_panscan', '4_3_bestfit']
+
+
+	def __init__(self):
+		self.aspectChanged = False
+		try:
+			self.defaultAspect = open("/proc/stb/video/aspect", "r").read().strip()
+		except IOError:
+			self.defaultAspect = None
+		try:
+			self.defaultPolicy = open("/proc/stb/video/policy", "r").read().strip()
+		except IOError:
+			self.defaultPolicy = None
+		try:
+			self.defaultPolicy2 = open("/proc/stb/video/policy2", "r").read().strip()
+		except IOError:
+			self.defaultPolicy2 = None
+		self.currentAVMode = self.V_MODES[0]
+
+		self["aspectChangeActions"] = HelpableActionMap(self, "InfobarAspectChangeActions",
+			{
+			 "aspectChange":(self.aspectChange, _("change aspect ratio"))
+			  }, -3)
+
+		self.onClose.append(self.__onClose)
+
+
+	def getAspectStr(self):
+		mode = self.V_DICT[self.currentAVMode]
+		aspectStr = mode['aspect']
+		policyStr = mode['title']
+		return "%s: %s\n%s: %s" % (_("Aspect"), aspectStr, _("Policy"), policyStr)
+
+
+	def setAspect(self, aspect, policy, policy2):
+		print 'aspect: %s policy: %s policy2: %s' % (str(aspect), str(policy), str(policy2))
+		if aspect:
+			try:
+				open("/proc/stb/video/aspect", "w").write(aspect)
+			except IOError as e:
+				print e
+		if policy:
+			try:
+				open("/proc/stb/video/policy", "w").write(policy)
+			except IOError as e:
+				print e
+		if policy2:
+			try:
+				open("/proc/stb/video/policy2", "w").write(policy2)
+			except IOError as e:
+				print e
+
+
+	def toggleAVMode(self):
+		self.aspectChanged = True
+		modeIdx = self.V_MODES.index(self.currentAVMode)
+		if modeIdx + 1 == len(self.V_MODES):
+			modeIdx = 0
+		else:
+			modeIdx += 1
+		self.currentAVMode = self.V_MODES[modeIdx]
+		mode = self.V_DICT[self.currentAVMode]
+		aspect = mode['aspect']
+		policy = 'policy' in mode and mode['policy'] or None
+		policy2 = 'policy2' in mode and mode['policy2'] or None
+		self.setAspect(aspect, policy, policy2)
+
+	def __onClose(self):
+		if self.aspectChanged:
+			self.setAspect(self.defaultAspect, self.defaultPolicy, self.defaultPolicy2)
 
 #===============================================================================
 #
 #===============================================================================
 class DP_Player(Screen, InfoBarBase, InfoBarShowHide, InfoBarCueSheetSupport,
 		InfoBarSeek, InfoBarAudioSelection, HelpableScreen,
-		InfoBarServiceNotifications, InfoBarSimpleEventView,
-		InfoBarSubtitleSupport, InfoBarServiceErrorPopupSupport, InfoBarExtensions, InfoBarNotifications, DPH_ScreenHelper):
+		InfoBarServiceNotifications, InfoBarSimpleEventView, SubsSupport,
+		InfoBarServiceErrorPopupSupport, InfoBarExtensions, InfoBarNotifications, DPH_ScreenHelper, InfoBarAspectChange):
 
 	ENIGMA_SERVICE_ID = None
 	ENIGMA_SERVICETS_ID = 0x1		#1
@@ -126,11 +226,19 @@ class DP_Player(Screen, InfoBarBase, InfoBarShowHide, InfoBarCueSheetSupport,
 
 		for x in HelpableScreen, InfoBarShowHide, InfoBarBase, InfoBarSeek, \
 				InfoBarAudioSelection, InfoBarSimpleEventView, \
-				InfoBarServiceNotifications, InfoBarSubtitleSupport, \
+				InfoBarServiceNotifications, \
 				InfoBarServiceErrorPopupSupport, InfoBarExtensions, InfoBarNotifications:
 			printl("x: " + str(x), self, "D")
 			x.__init__(self)
 		printl("currentIndex: " + str(currentIndex), self, "D")
+
+		# for external subtitles
+		initSubsSettings()
+		SubsSupport.__init__(self, embeddedSupport=True, searchSupport=True)
+
+		self.statusScreen = self.session.instantiateDialog(StatusScreen)
+
+		InfoBarAspectChange.__init__(self)
 
 		self.listViewList = listViewList
 		self.currentIndex = currentIndex
@@ -202,6 +310,65 @@ class DP_Player(Screen, InfoBarBase, InfoBarShowHide, InfoBarCueSheetSupport,
 			self.setSeekState(self.SEEK_STATE_PLAY)
 
 			self.onLayoutFinish.append(self.resumePlayerData)
+
+	def audioSelection(self):
+		self.session.openWithCallback(self.audioSelected, MyAudioSelection, infobar=self)
+
+	def subtitleSelection(self):
+		from Screens.AudioSelection import SubtitleSelection
+		self.session.open(SubtitleSelection, self)
+
+	def refreshSubs(self):
+		if not self.shown:
+			if not self.isSubsLoaded():
+				self.statusScreen.setStatus(_("No external subtitles loaded"))
+			else:
+				self.playAfterSeek()
+				self.statusScreen.setStatus(_("Refreshing subtitles..."))
+
+	def subsDelayInc(self):
+		if not self.isSubsLoaded():
+			self.statusScreen.setStatus(_("No external subtitles loaded"))
+		else:
+			delay = self.getSubsDelay()
+			delay += 200
+			self.setSubsDelay(delay)
+			if delay > 0:
+				self.statusScreen.setStatus("+%d ms" % delay)
+			else:
+				self.statusScreen.setStatus("%d ms" % delay)
+
+	def subsDelayDec(self):
+		if not self.isSubsLoaded():
+			self.statusScreen.setStatus(_("No external subtitles loaded"))
+		else:
+			delay = self.getSubsDelay()
+			delay -= 200
+			self.setSubsDelay(delay)
+			if delay > 0:
+				self.statusScreen.setStatus("+%d ms" % delay)
+			else:
+				self.statusScreen.setStatus("%d ms" % delay)
+
+	def aspectChange(self):
+		if not self.shown:
+			super(DP_Player, self).toggleAVMode()
+			aspectStr = self.getAspectStr()
+			self.statusScreen.setStatus(aspectStr, "#00ff00")
+
+	def toggleAVMode(self):
+		self.aspectChanged = True
+		modeIdx = self.V_MODES.index(self.currentAVMode)
+		if modeIdx + 1 == len(self.V_MODES):
+			modeIdx = 0
+		else:
+			modeIdx += 1
+		self.currentAVMode = self.V_MODES[modeIdx]
+		mode = self.V_DICT[self.currentAVMode]
+		aspect = mode['aspect']
+		policy = 'policy' in mode and mode['policy'] or None
+		policy2 = 'policy2' in mode and mode['policy2'] or None
+		self.setAspect(aspect, policy, policy2)
 
 	#==============================================================================
 	#
@@ -903,7 +1070,7 @@ class DP_Player(Screen, InfoBarBase, InfoBarShowHide, InfoBarCueSheetSupport,
 		if config.plugins.dreamplex.lcd4linux.value:
 			remove(self.tempPoster)
 
-		# self.session.nav.playService(getLiveTv())
+		self.statusScreen.doClose()
 		self.close((False, ))
 		
 		printl("", self, "C")
@@ -1278,3 +1445,73 @@ class DP_Player(Screen, InfoBarBase, InfoBarShowHide, InfoBarCueSheetSupport,
 		copy2(self.whatPoster, self.tempPoster)
 
 		printl("", self, "C")
+
+#===========================================================================
+#
+#===========================================================================
+# audioSelection with removed subtitles support
+class MyAudioSelection(AudioSelection):
+
+	#===========================================================================
+	#
+	#===========================================================================
+	def __init__(self, session, infobar=None, page='audio'):
+		try:
+			AudioSelection.__init__(self, session, infobar, page)
+		except Exception:
+			# really old AudioSelection
+			AudioSelection.__init__(self, session)
+		self.skinName = 'AudioSelection'
+
+	def getSubtitleList(self):
+		return []
+
+#===========================================================================
+#
+#===========================================================================
+class MyInfoBarAudioSelection(InfoBarAudioSelection):
+
+	#===========================================================================
+	#
+	#===========================================================================
+	def audioSelection(self):
+		self.session.openWithCallback(self.audioSelected, MyAudioSelection, infobar=self)
+
+class StatusScreen(Screen):
+
+	def __init__(self, session):
+		desktop = getDesktop(0)
+		size = desktop.size()
+		self.sc_width = size.width()
+		self.sc_height = size.height()
+
+		statusPositionX = 50
+		statusPositionY = 100
+		self.delayTimer = eTimer()
+		self.delayTimer.callback.append(self.hideStatus)
+		self.delayTimerDelay = 1500
+
+		self.skin = """
+			<screen name="StatusScreen" position="%s,%s" size="%s,90" zPosition="0" backgroundColor="transparent" flags="wfNoBorder">
+					<widget name="status" position="0,0" size="%s,70" valign="center" halign="left" font="Regular;22" transparent="1" foregroundColor="yellow" shadowColor="#40101010" shadowOffset="3,3" />
+			</screen>""" % (str(statusPositionX), str(statusPositionY), str(self.sc_width), str(self.sc_width))
+
+		Screen.__init__(self, session)
+		self.stand_alone = True
+		print 'initializing status display'
+		self["status"] = Label()
+		self.onClose.append(self.__onClose)
+
+	def setStatus(self, text, color="yellow"):
+		self['status'].setText(text)
+		self['status'].instance.setForegroundColor(parseColor(color))
+		self.show()
+		self.delayTimer.start(self.delayTimerDelay, True)
+
+	def hideStatus(self):
+		self.hide()
+		self['status'].setText("")
+
+	def __onClose(self):
+		self.delayTimer.stop()
+		del self.delayTimer
