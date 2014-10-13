@@ -273,7 +273,7 @@ class DP_Player(Screen, InfoBarBase, InfoBarShowHide, InfoBarCueSheetSupport,
 		{
 		"ok": self.ok,
 		"cancel": self.hide,
-		"searchWhilePlaying": self.searchWhilePlaying,
+		"searchWhilePlaying": self.subtitleSelection,
 		"keyTv": self.leavePlayer,
 		"stop": self.leavePlayer,
 		"seekManual": self.seekManual,
@@ -312,9 +312,11 @@ class DP_Player(Screen, InfoBarBase, InfoBarShowHide, InfoBarCueSheetSupport,
 			self.onLayoutFinish.append(self.resumePlayerData)
 
 	def audioSelection(self):
+		self.subtitles_enabled = False
 		self.session.openWithCallback(self.audioSelected, MyAudioSelection, infobar=self)
 
 	def subtitleSelection(self):
+		self.subtitles_enabled = True
 		from Screens.AudioSelection import SubtitleSelection
 		self.session.open(SubtitleSelection, self)
 
