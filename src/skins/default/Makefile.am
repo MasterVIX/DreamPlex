@@ -1,4 +1,4 @@
-SUBDIRS = buttons icons images picons
+SUBDIRS = buttons icons images selectionbars
 
 installdir = $(libdir)/enigma2/python/Plugins/Extensions/DreamPlex/skins/default
 
