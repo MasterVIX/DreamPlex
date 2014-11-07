@@ -1213,7 +1213,7 @@ class PlexLibrary(Screen):
 		myplex_header['Authorization'] = "Basic %s" % base64string
 		myplex_header['X-Plex-Username'] = self.g_myplex_username
 
-		conn = httplib.HTTPSConnection(MYPLEX_SERVER, timeout=10, port=443)
+		conn = httplib.HTTPSConnection(MYPLEX_SERVER, timeout=20, port=443)
 		conn.request(url="/users/sign_in.xml", method="POST", headers=myplex_header)
 		data = conn.getresponse()
 		response = data.read()
@@ -1259,7 +1259,7 @@ class PlexLibrary(Screen):
 		self.urlPath = urlPath
 
 		try:
-			conn = httplib.HTTPConnection(server,timeout=20)
+			conn = httplib.HTTPConnection(server,timeout=30)
 
 			# the very first time it is none
 			# we also have to check if the server that where used changed meanwhile
@@ -2206,7 +2206,7 @@ class PlexLibrary(Screen):
 		myplex_header = getPlexHeader(self.g_sessionID)
 		myplex_header['X-Plex-Token'] = str(self.serverConfig_myplexToken)
 
-		conn = httplib.HTTPSConnection(MYPLEX_SERVER, timeout=10, port=443)
+		conn = httplib.HTTPSConnection(MYPLEX_SERVER, timeout=20, port=443)
 		conn.request(url=url, method="GET", headers=myplex_header)
 		data = conn.getresponse()
 		response = data.read()
